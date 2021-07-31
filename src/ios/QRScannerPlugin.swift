@@ -7,6 +7,14 @@ import AVFoundation
     var captureVideoPreviewLayer: AVCaptureVideoPreviewLayer!
     var cameraView: CameraView!
     var command: CDVInvokedUrlCommand?
+    var metaOutput: AVCaptureMetadataOutput?
+    
+    enum QRScannerError: String {
+        case unexpected_error = "unexpected_error",
+        camera_access_denied = "camera_access_denied",
+        camera_access_restricted = "camera_access_restricted",
+        camera_unavailable = "camera_unavailable"
+    }
     
     class CameraView: UIView {
         var videoPreviewLayer:AVCaptureVideoPreviewLayer?
@@ -32,10 +40,8 @@ import AVFoundation
                     layer.frame = self.bounds;
                 }
             }
-            
             self.videoPreviewLayer?.connection?.videoOrientation = interfaceOrientationToVideoOrientation(UIApplication.shared.statusBarOrientation);
         }
-        
         
         func addPreviewLayer(_ previewLayer:AVCaptureVideoPreviewLayer?) {
             previewLayer!.videoGravity = AVLayerVideoGravity.resizeAspectFill
@@ -74,57 +80,58 @@ import AVFoundation
         }
     }
     
-    
     private func prepScanner(_ command: CDVInvokedUrlCommand) -> Bool {
-        let pluginResult:CDVPluginResult = CDVPluginResult.init(status: CDVCommandStatus_ERROR)
-        self.captureSession = AVCaptureSession()
-        if let captureSession = self.captureSession {
-            let status = AVCaptureDevice.authorizationStatus(for: AVMediaType.video)
-            if (status == AVAuthorizationStatus.restricted) {
-                self.commandDelegate.send(pluginResult, callbackId: command.callbackId)
-                return false
-            } else if status == AVAuthorizationStatus.denied {
-                self.commandDelegate.send(pluginResult, callbackId: command.callbackId)
-                return false
-            }
-            self.cameraView.backgroundColor = UIColor.clear
-            self.webView!.superview!.insertSubview(self.cameraView, belowSubview: self.webView!)
-            guard let videoCaptureDevice = AVCaptureDevice.default(for: AVMediaType.video) else {
-                self.commandDelegate.send(pluginResult, callbackId: command.callbackId)
-                return false
-            }
-            let videoInput: AVCaptureDeviceInput
-            do {
-                videoInput = try AVCaptureDeviceInput(device: videoCaptureDevice)
-            } catch let error {
-                print(error)
-                self.commandDelegate.send(pluginResult, callbackId: command.callbackId)
-                return false
-            }
-            if captureSession.canAddInput(videoInput) {
-                captureSession.addInput(videoInput)
-            } else {
-                self.commandDelegate.send(pluginResult, callbackId: command.callbackId)
-                return false
-            }
-            let metadataOutput = AVCaptureMetadataOutput()
-            if captureSession.canAddOutput(metadataOutput) {
-                captureSession.addOutput(metadataOutput)
-                metadataOutput.setMetadataObjectsDelegate(self, queue: DispatchQueue.main)
-                metadataOutput.metadataObjectTypes = [AVMetadataObject.ObjectType.qr]
-                self.captureVideoPreviewLayer = AVCaptureVideoPreviewLayer(session: captureSession)
-                self.cameraView.addPreviewLayer(captureVideoPreviewLayer)
-                captureSession.startRunning();
-                return true
-            } else {
-                self.commandDelegate.send(pluginResult, callbackId: command.callbackId)
-                return false
+        var pluginResult:CDVPluginResult = CDVPluginResult.init(status: CDVCommandStatus_ERROR)
+        if self.captureSession == nil || self.captureSession?.isRunning == false {
+            self.captureSession = AVCaptureSession()
+            if let captureSession = self.captureSession {
+                let status = AVCaptureDevice.authorizationStatus(for: AVMediaType.video)
+                if (status == AVAuthorizationStatus.restricted) {
+                    pluginResult = CDVPluginResult.init(status: CDVCommandStatus_ERROR, messageAs: QRScannerError.camera_access_restricted.rawValue)
+                    self.commandDelegate.send(pluginResult, callbackId: command.callbackId)
+                    return false
+                } else if status == AVAuthorizationStatus.denied {
+                    pluginResult = CDVPluginResult.init(status: CDVCommandStatus_ERROR, messageAs: QRScannerError.camera_access_denied.rawValue)
+                    self.commandDelegate.send(pluginResult, callbackId: command.callbackId)
+                    return false
+                }
+                self.cameraView.backgroundColor = UIColor.clear
+                self.webView!.superview!.insertSubview(self.cameraView, belowSubview: self.webView!)
+                guard let videoCaptureDevice = AVCaptureDevice.default(for: AVMediaType.video) else {
+                    self.commandDelegate.send(pluginResult, callbackId: command.callbackId)
+                    return false
+                }
+                let videoInput: AVCaptureDeviceInput
+                do {
+                    videoInput = try AVCaptureDeviceInput(device: videoCaptureDevice)
+                } catch let error {
+                    print(error)
+                    self.commandDelegate.send(pluginResult, callbackId: command.callbackId)
+                    return false
+                }
+                if captureSession.canAddInput(videoInput) {
+                    captureSession.addInput(videoInput)
+                } else {
+                    self.commandDelegate.send(pluginResult, callbackId: command.callbackId)
+                    return false
+                }
+                self.metaOutput = AVCaptureMetadataOutput()
+                if captureSession.canAddOutput(self.metaOutput!) {
+                    captureSession.addOutput(self.metaOutput!)
+                    self.metaOutput!.setMetadataObjectsDelegate(self, queue: DispatchQueue.main)
+                    self.metaOutput!.metadataObjectTypes = [AVMetadataObject.ObjectType.qr]
+                    self.captureVideoPreviewLayer = AVCaptureVideoPreviewLayer(session: captureSession)
+                    self.cameraView.addPreviewLayer(captureVideoPreviewLayer)
+                    captureSession.startRunning();
+                    return true
+                } else {
+                    self.commandDelegate.send(pluginResult, callbackId: command.callbackId)
+                    return false
+                }
             }
         }
-        self.commandDelegate.send(pluginResult, callbackId: command.callbackId)
-        return false
+        return true
     }
-    
     
     override func pluginInitialize() {
         super.pluginInitialize()
@@ -133,14 +140,17 @@ import AVFoundation
     }
     
     func metadataOutput(_ output: AVCaptureMetadataOutput, didOutput metadataObjects: [AVMetadataObject], from connection: AVCaptureConnection) {
+        if metadataObjects.count == 0 { return }
         if let first = metadataObjects.first {
             guard let readableObject = first as? AVMetadataMachineReadableCodeObject else { return }
-            guard let stringyfiedValue = readableObject.stringValue else { return }
-            print("QRCode - \(stringyfiedValue)")
-            if let command = self.command {
-                self.stopScanning()
-                let pluginResult:CDVPluginResult = CDVPluginResult.init(status: CDVCommandStatus_OK, messageAs: stringyfiedValue)
-                self.commandDelegate.send(pluginResult, callbackId: command.callbackId)
+            if readableObject.type == AVMetadataObject.ObjectType.qr {
+                guard let stringyfiedValue = readableObject.stringValue else { return }
+                print("QRCode - \(stringyfiedValue)")
+                if let command = self.command {
+                    let pluginResult:CDVPluginResult = CDVPluginResult.init(status: CDVCommandStatus_OK, messageAs: stringyfiedValue)
+                    self.commandDelegate.send(pluginResult, callbackId: command.callbackId)
+                    self.command = nil
+                }
             }
         }
     }
@@ -152,16 +162,21 @@ import AVFoundation
             self.captureVideoPreviewLayer = nil
             self.captureSession = nil
             self.captureVideoPreviewLayer = nil
+            self.metaOutput = nil
         }
     }
     
     private func startScanning(_ command: CDVInvokedUrlCommand) {
         self.backgroundThread(delay: 0, completion: {
             if(self.prepScanner(command)) {
-                self.webView?.isOpaque = false
-                self.webView?.backgroundColor = UIColor.clear
+                self.makeOpaque()
             }
         })
+    }
+    
+    func makeOpaque() {
+        self.webView?.isOpaque = false
+        self.webView?.backgroundColor = UIColor.clear
     }
     
     @objc(qrScanner:)
@@ -184,7 +199,6 @@ import AVFoundation
         let buttonText = command.arguments[4] as? String ?? "I don't have a QR Code"
         let showButton = command.arguments[5] as? Bool ?? false
         let isRtl = command.arguments[6] as? Bool ?? false
-        self.stopScanning()
         let status = AVCaptureDevice.authorizationStatus(for: AVMediaType.video)
         self.command = command
         if (status == AVAuthorizationStatus.notDetermined) {
@@ -199,6 +213,7 @@ import AVFoundation
     @objc(stopScanner:)
     func stopScanner(_ command: CDVInvokedUrlCommand) {
         let pluginResult:CDVPluginResult = CDVPluginResult.init(status: CDVCommandStatus_OK)
+        self.makeOpaque()
         backgroundThread(delay: 0, background: {
             self.stopScanning()
         }, completion: {
