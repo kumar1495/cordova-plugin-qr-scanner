@@ -191,14 +191,6 @@ import AVFoundation
     
     @objc(startScanner:)
     func startScanner(_ command: CDVInvokedUrlCommand) {
-        var pluginResult:CDVPluginResult = CDVPluginResult.init(status: CDVCommandStatus_ERROR)
-        let startScanner = command.arguments[0] as? String ?? ""
-        let screenTitle = command.arguments[1] as? String ?? "Scan QR Code."
-        let displayText = command.arguments[2] as? String ?? "Point your phone to the QR code to scan it"
-        let displayTextColor = command.arguments[3] as? String ?? "0b0b0b"
-        let buttonText = command.arguments[4] as? String ?? "I don't have a QR Code"
-        let showButton = command.arguments[5] as? Bool ?? false
-        let isRtl = command.arguments[6] as? Bool ?? false
         let status = AVCaptureDevice.authorizationStatus(for: AVMediaType.video)
         self.command = command
         if (status == AVAuthorizationStatus.notDetermined) {
